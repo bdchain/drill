@@ -122,7 +122,7 @@ public class IPFSGroupScan extends AbstractGroupScan {
       for (Multihash leaf : leafAddrMap.keySet()) {
         String peerHostname = leafAddrMap.get(leaf);
 
-        Optional<DrillbitEndpoint> oep = coordinator.getAvailableEndpoints()
+        Optional<DrillbitEndpoint> oep = coordinator.getEndpointsByPlugin(IPFSStoragePlugin.class)
             .stream()
             .filter(a -> a.getAddress().equals(peerHostname))
             .findAny();
@@ -143,7 +143,7 @@ public class IPFSGroupScan extends AbstractGroupScan {
               .setState(DrillbitEndpoint.State.ONLINE)
               .build();
           //DRILL-7777: how to safely remove endpoints that are no longer needed once the query is completed?
-          ClusterCoordinator.RegistrationHandle handle = coordinator.register(ep);
+          ClusterCoordinator.RegistrationHandle handle = coordinator.registerByPlugin(ep, IPFSStoragePlugin.class);
         }
 
         IPFSWork work = new IPFSWork(leaf);
@@ -225,7 +225,8 @@ public class IPFSGroupScan extends AbstractGroupScan {
   @Override
   public void applyAssignments(List<DrillbitEndpoint> incomingEndpoints) {
     logger.debug("Applying assignments: endpointWorksMap = {}", endpointWorksMap);
-    assignments = AssignmentCreator.getMappings(incomingEndpoints, ipfsWorkList);
+    List<DrillbitEndpoint> endpoints = getStoragePlugin().getContext().getClusterCoordinator().getEndpointsByPlugin(IPFSStoragePlugin.class).stream().collect(Collectors.toList());
+    assignments = AssignmentCreator.getMappings(endpoints, ipfsWorkList);
   }
 
   @Override

@@ -17,26 +17,12 @@
  */
 package org.apache.drill.exec.coord.zk;
 
-import static org.apache.drill.shaded.guava.com.google.common.collect.Collections2.transform;
-import java.io.IOException;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.ArrayList;
-import java.util.Set;
-import java.util.HashSet;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
-import org.apache.curator.framework.imps.DefaultACLProvider;
-import org.apache.drill.shaded.guava.com.google.common.base.Throwables;
 import org.apache.commons.collections.keyvalue.MultiKey;
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.framework.api.ACLProvider;
+import org.apache.curator.framework.imps.DefaultACLProvider;
 import org.apache.curator.framework.state.ConnectionState;
 import org.apache.curator.framework.state.ConnectionStateListener;
 import org.apache.curator.retry.RetryNTimes;
@@ -57,7 +43,25 @@ import org.apache.drill.exec.coord.store.TransientStoreConfig;
 import org.apache.drill.exec.coord.store.TransientStoreFactory;
 import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint;
 import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint.State;
+import org.apache.drill.exec.store.StoragePlugin;
 import org.apache.drill.shaded.guava.com.google.common.base.Function;
+import org.apache.drill.shaded.guava.com.google.common.base.Throwables;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import static org.apache.drill.shaded.guava.com.google.common.collect.Collections2.transform;
 
 /**
  * Manages cluster coordination utilizing zookeeper. *
@@ -76,6 +80,7 @@ public class ZKClusterCoordinator extends ClusterCoordinator {
 
   // endpointsMap maps Multikey( comprises of endoint address and port) to Drillbit endpoints
   private ConcurrentHashMap<MultiKey, DrillbitEndpoint> endpointsMap = new ConcurrentHashMap<MultiKey,DrillbitEndpoint>();
+  private final ConcurrentHashMap<Class<? extends StoragePlugin>, Map<RegistrationHandle, DrillbitEndpoint>> endpointsByPlugin = new ConcurrentHashMap<>();
   private static final Pattern ZK_COMPLEX_STRING = Pattern.compile("(^.*?)/(.*)/([^/]*)$");
 
   public ZKClusterCoordinator(DrillConfig config, String connect) {
@@ -190,6 +195,17 @@ public class ZKClusterCoordinator extends ClusterCoordinator {
   }
 
   @Override
+  public RegistrationHandle registerByPlugin(DrillbitEndpoint data, Class<? extends StoragePlugin> ownerClass) {
+    final ZKRegistrationHandle h = new ZKRegistrationHandle(UUID.randomUUID().toString(), data);
+    data = data.toBuilder().setState(State.ONLINE).build();
+    if (!endpointsByPlugin.containsKey(ownerClass)) {
+      endpointsByPlugin.put(ownerClass, new ConcurrentHashMap<>());
+    }
+    endpointsByPlugin.get(ownerClass).put(h, data);
+    return h;
+  }
+
+  @Override
   public void unregister(RegistrationHandle handle) {
     if (!(handle instanceof ZKRegistrationHandle)) {
       throw new UnsupportedOperationException("Unknown handle type: " + handle.getClass().getName());
@@ -211,6 +227,19 @@ public class ZKClusterCoordinator extends ClusterCoordinator {
       Throwables.throwIfUnchecked(e);
       throw new RuntimeException(e);
     }
+  }
+
+  @Override
+  public void unregisterByPlugin(RegistrationHandle handle, Class<? extends StoragePlugin> ownerClass) {
+    if (!(handle instanceof ZKRegistrationHandle)) {
+      throw new UnsupportedOperationException("Unknown handle type: " + handle.getClass().getName());
+    }
+
+    ZKRegistrationHandle h = (ZKRegistrationHandle) handle;
+    if (!endpointsByPlugin.containsKey(ownerClass)) {
+      return;
+    }
+    endpointsByPlugin.get(ownerClass).remove(h);
   }
 
   /**
@@ -257,6 +286,14 @@ public class ZKClusterCoordinator extends ClusterCoordinator {
     }
     logger.debug("Online endpoints in ZK are" + runningEndPoints.toString());
     return runningEndPoints;
+  }
+
+  @Override
+  public Collection<DrillbitEndpoint> getEndpointsByPlugin(Class<? extends StoragePlugin> ownerClass) {
+    if (!endpointsByPlugin.containsKey(ownerClass)) {
+      return Collections.emptyList();
+    }
+    return endpointsByPlugin.get(ownerClass).values();
   }
 
   @Override

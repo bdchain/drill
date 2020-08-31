@@ -17,15 +17,6 @@
  */
 package org.apache.drill.exec.coord.local;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
-
 import org.apache.drill.exec.coord.ClusterCoordinator;
 import org.apache.drill.exec.coord.DistributedSemaphore;
 import org.apache.drill.exec.coord.store.CachingTransientStoreFactory;
@@ -34,8 +25,18 @@ import org.apache.drill.exec.coord.store.TransientStoreConfig;
 import org.apache.drill.exec.coord.store.TransientStoreFactory;
 import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint;
 import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint.State;
-
+import org.apache.drill.exec.store.StoragePlugin;
 import org.apache.drill.shaded.guava.com.google.common.collect.Maps;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 public class LocalClusterCoordinator extends ClusterCoordinator {
   private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(LocalClusterCoordinator.class);
@@ -46,6 +47,7 @@ public class LocalClusterCoordinator extends ClusterCoordinator {
    * ConcurrentModificationException.
    */
   private final Map<RegistrationHandle, DrillbitEndpoint> endpoints = new ConcurrentHashMap<>();
+  private final Map<Class<? extends StoragePlugin>, Map<RegistrationHandle, DrillbitEndpoint>> endpointsByPlugin = new ConcurrentHashMap<>();
   private final ConcurrentMap<String, DistributedSemaphore> semaphores = Maps.newConcurrentMap();
 
   private final TransientStoreFactory factory = CachingTransientStoreFactory.of(new TransientStoreFactory() {
@@ -79,12 +81,37 @@ public class LocalClusterCoordinator extends ClusterCoordinator {
   }
 
   @Override
+  public RegistrationHandle registerByPlugin(DrillbitEndpoint data, Class<? extends StoragePlugin> ownerClass) {
+    logger.debug("Endpoint registered for storage plugin {}: {}.", ownerClass.getName(), data);
+    final Handle h = new Handle(data);
+    data = data.toBuilder().setState(State.ONLINE).build();
+    if (!endpointsByPlugin.containsKey(ownerClass)) {
+      endpointsByPlugin.put(ownerClass, new ConcurrentHashMap<>());
+    }
+    endpointsByPlugin.get(ownerClass).put(h, data);
+    return h;
+  }
+
+  @Override
   public void unregister(final RegistrationHandle handle) {
     if (handle == null) {
       return;
     }
 
     endpoints.remove(handle);
+  }
+
+  @Override
+  public void unregisterByPlugin(RegistrationHandle handle, Class<? extends StoragePlugin> ownerClass) {
+    if (handle == null) {
+      return;
+    }
+
+    if (!endpointsByPlugin.containsKey(ownerClass)) {
+      return;
+    }
+
+    endpointsByPlugin.get(ownerClass).remove(handle);
   }
 
   /**
@@ -122,6 +149,14 @@ public class LocalClusterCoordinator extends ClusterCoordinator {
       }
     }
     return runningEndPoints;
+  }
+
+  @Override
+  public Collection<DrillbitEndpoint> getEndpointsByPlugin(Class<? extends StoragePlugin> ownerClass) {
+    if (!endpointsByPlugin.containsKey(ownerClass)) {
+      return Collections.emptyList();
+    }
+    return endpointsByPlugin.get(ownerClass).values();
   }
 
   private class Handle implements RegistrationHandle {

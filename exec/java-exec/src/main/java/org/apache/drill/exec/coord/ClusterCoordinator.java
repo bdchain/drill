@@ -17,15 +17,16 @@
  */
 package org.apache.drill.exec.coord;
 
-import java.util.Collection;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-
 import org.apache.drill.exec.coord.store.TransientStore;
 import org.apache.drill.exec.coord.store.TransientStoreConfig;
 import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint;
 import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint.State;
+import org.apache.drill.exec.store.StoragePlugin;
 import org.apache.drill.exec.work.foreman.DrillbitStatusListener;
+
+import java.util.Collection;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Pluggable interface built to manage cluster coordination. Allows Drillbit or DrillClient to register its capabilities
@@ -49,7 +50,11 @@ public abstract class ClusterCoordinator implements AutoCloseable {
 
   public abstract RegistrationHandle register(DrillbitEndpoint data);
 
+  public abstract RegistrationHandle registerByPlugin(DrillbitEndpoint data, Class<? extends StoragePlugin> ownerClass);
+
   public abstract void unregister(RegistrationHandle handle);
+
+  public abstract void unregisterByPlugin(RegistrationHandle handle, Class<? extends StoragePlugin> ownerClass);
 
   /**
    * Get a collection of available Drillbit endpoints, Thread-safe.
@@ -68,6 +73,8 @@ public abstract class ClusterCoordinator implements AutoCloseable {
    */
 
   public abstract Collection<DrillbitEndpoint> getOnlineEndPoints();
+
+  public abstract Collection<DrillbitEndpoint> getEndpointsByPlugin(Class<? extends StoragePlugin> ownerClass);
 
   public abstract RegistrationHandle update(RegistrationHandle handle, State state);
 
